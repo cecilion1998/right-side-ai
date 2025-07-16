@@ -16,6 +16,7 @@ import javax.swing.*
 import com.google.gson.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.awt.Font
 
 
 class MyToolWindowFactory : ToolWindowFactory {
@@ -24,8 +25,8 @@ class MyToolWindowFactory : ToolWindowFactory {
         val inputField = JBTextField()
         val resultArea = JTextArea(10, 30).apply {
             isEditable = false
-            lineWrap = true
-            wrapStyleWord = true
+            lineWrap = false
+            font = Font("Monospaced", Font.PLAIN, 12)
         }
 
         val scrollPane = JBScrollPane(resultArea)
@@ -102,10 +103,21 @@ class MyToolWindowFactory : ToolWindowFactory {
 
                 val textObj = contentArray[0].asJsonObject
                 val text = textObj.get("text").asString
-                text.trim()
+                // Detect if it's likely to be code (simple heuristic)
+                return if (looksLikeCode(text)) {
+                    "```\n$text\n```"
+                } else {
+                    text
+                }
             }
         } catch (e: Exception) {
             "Exception: ${e.message}"
         }
     }
+    private fun looksLikeCode(text: String): Boolean {
+        val codeKeywords = listOf("public ", "class ", "def ", "function ", "val ", "var ", "if (", "for (", "while (")
+        return codeKeywords.any { text.contains(it) } || text.contains("{") && text.contains("}")
+    }
+
+
 }
