@@ -124,27 +124,37 @@ class MyToolWindowFactory : ToolWindowFactory {
         val codeKeywords = listOf("public ", "class ", "def ", "function ", "val ", "var ", "if (", "for (", "while (")
         return codeKeywords.any { text.contains(it) } || text.contains("{") && text.contains("}")
     }
-
     private fun formatResponseText(raw: String): String {
+        println("=== RAW RESPONSE START ===")
+        println(raw)
+        println("=== RAW RESPONSE END ===")
+
         val builder = StringBuilder()
         builder.append("<html><body style=\"font-family: monospace; font-size: 12px;\">")
 
         var inCodeBlock = false
+        var codeLanguage = ""
 
         for (line in raw.lines()) {
             when {
-                line.trim() == "```" && inCodeBlock -> {
+                line.trim() == "```" -> {
                     builder.append("</pre>")
                     inCodeBlock = false
+                    codeLanguage = ""
                 }
 
-                line.trim().startsWith("```java") && !inCodeBlock -> {
+                line.trim().startsWith("```java") || line.trim().startsWith("```bash") -> {
+                    codeLanguage = line.trim().removePrefix("```").lowercase()
                     builder.append("<pre style=\"background-color:#1e1e1e; color:#dcdcdc; padding:10px;\">")
                     inCodeBlock = true
                 }
 
                 inCodeBlock -> {
-                    val highlighted = highlightJava(line)
+                    val highlighted = when (codeLanguage) {
+                        "java" -> highlightJava(line)
+                        "bash" -> highlightBash(line)
+                        else -> escapeHtml(line)
+                    }
                     builder.append(highlighted).append("\n")
                 }
 
@@ -166,6 +176,42 @@ class MyToolWindowFactory : ToolWindowFactory {
 
         builder.append("</body></html>")
         return builder.toString()
+    }
+    private fun highlightBash(code: String): String {
+        val keywords = listOf("echo", "cd", "ls", "pwd", "rm", "mkdir", "touch", "cat", "sudo", "chmod", "chown", "git", "export")
+        val variables = Regex("\\$[A-Za-z_][A-Za-z0-9_]*")
+
+        var escaped = escapeHtml(code)
+
+        // Highlight comments
+        escaped = escaped.replace(Regex("#.*")) {
+            "<span style='color:#6a9955'>${it.value}</span>"
+        }
+
+        // Highlight strings
+        escaped = escaped.replace(Regex("\"(.*?)\"")) {
+            "<span style='color:#ce9178'>&quot;${it.groupValues[1]}&quot;</span>"
+        }
+
+        // Highlight variables
+        escaped = escaped.replace(variables) {
+            "<span style='color:#dcdcaa'>${it.value}</span>"
+        }
+
+        // Highlight keywords
+        for (kw in keywords) {
+            escaped = escaped.replace(Regex("\\b$kw\\b")) {
+                "<span style='color:#569cd6'>${it.value}</span>"
+            }
+        }
+
+        return escaped
+    }
+    private fun escapeHtml(text: String): String {
+        return text
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
     }
     private fun highlightJava(code: String): String {
         val keywords = listOf(
