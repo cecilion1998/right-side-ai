@@ -23,13 +23,15 @@ class MyToolWindowFactory : ToolWindowFactory {
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         val panel = JPanel(BorderLayout(10, 10))
         val inputField = JBTextField()
-        val resultArea = JTextArea(10, 30).apply {
+        val resultPane = JEditorPane("text/html", "").apply {
             isEditable = false
-            lineWrap = false
+            putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, true)
             font = Font("Monospaced", Font.PLAIN, 12)
         }
 
-        val scrollPane = JBScrollPane(resultArea)
+
+
+        val scrollPane = JBScrollPane(resultPane)
         val button = JButton("Ask ChatGPT")
 
         button.addActionListener {
@@ -38,7 +40,11 @@ class MyToolWindowFactory : ToolWindowFactory {
                 CoroutineScope(Dispatchers.IO).launch {
                     val response = queryChatGPT(input)
                     SwingUtilities.invokeLater {
-                        resultArea.text = response ?: "Error getting response"
+                        val formattedHtml = formatResponseText(response ?: "Error")
+                        println("=== HTML OUTPUT START ===")
+                        println(formattedHtml)
+                        println("=== HTML OUTPUT END ===")
+                        resultPane.text = formattedHtml
                     }
                 }
             }
@@ -119,5 +125,49 @@ class MyToolWindowFactory : ToolWindowFactory {
         return codeKeywords.any { text.contains(it) } || text.contains("{") && text.contains("}")
     }
 
+    private fun formatResponseText(raw: String): String {
+        val builder = StringBuilder()
+        builder.append("<html><body style=\"font-family: monospace; font-size: 12px;\">")
 
+        var inCodeBlock = false
+
+        for (line in raw.lines()) {
+            when {
+                line.trim() == "```" && inCodeBlock -> {
+                    builder.append("</pre>")
+                    inCodeBlock = false
+                }
+
+                line.trim().startsWith("```java") && !inCodeBlock -> {
+                    builder.append("<pre style=\"background-color:#f4f4f4; padding:10px;\">")
+                    inCodeBlock = true
+                }
+
+                inCodeBlock -> {
+                    val escaped = line
+                        .replace("&", "&amp;")
+                        .replace("<", "&lt;")
+                        .replace(">", "&gt;")
+                    builder.append(escaped).append("\n")
+                }
+
+                line.trim().startsWith("###") -> {
+                    val heading = line.removePrefix("###").trim()
+                    builder.append("<h3>$heading</h3>")
+                }
+
+                "**" in line -> {
+                    val bolded = line.replace(Regex("\\*\\*(.*?)\\*\\*"), "<b>$1</b>")
+                    builder.append("<div>$bolded</div>")
+                }
+
+                else -> {
+                    builder.append("<div>${line}</div>")
+                }
+            }
+        }
+
+        builder.append("</body></html>")
+        return builder.toString()
+    }
 }
