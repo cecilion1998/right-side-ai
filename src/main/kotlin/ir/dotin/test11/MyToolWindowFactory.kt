@@ -139,16 +139,13 @@ class MyToolWindowFactory : ToolWindowFactory {
                 }
 
                 line.trim().startsWith("```java") && !inCodeBlock -> {
-                    builder.append("<pre style=\"background-color:#f4f4f4; padding:10px;\">")
+                    builder.append("<pre style=\"background-color:#1e1e1e; color:#dcdcdc; padding:10px;\">")
                     inCodeBlock = true
                 }
 
                 inCodeBlock -> {
-                    val escaped = line
-                        .replace("&", "&amp;")
-                        .replace("<", "&lt;")
-                        .replace(">", "&gt;")
-                    builder.append(escaped).append("\n")
+                    val highlighted = highlightJava(line)
+                    builder.append(highlighted).append("\n")
                 }
 
                 line.trim().startsWith("###") -> {
@@ -170,4 +167,35 @@ class MyToolWindowFactory : ToolWindowFactory {
         builder.append("</body></html>")
         return builder.toString()
     }
+    private fun highlightJava(code: String): String {
+        val keywords = listOf(
+            "public", "class", "static", "void", "int", "long", "if", "else",
+            "return", "new", "private", "protected", "boolean", "String"
+        )
+
+        var escaped = code
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+
+        // Highlight strings
+        escaped = escaped.replace(Regex("\"(.*?)\"")) {
+            "<span style='color:#ce9178'>&quot;${it.groupValues[1]}&quot;</span>"
+        }
+
+        // Highlight comments
+        escaped = escaped.replace(Regex("(//.*)$")) {
+            "<span style='color:#6a9955'>${it.groupValues[1]}</span>"
+        }
+
+        // Highlight keywords
+        for (kw in keywords) {
+            escaped = escaped.replace(Regex("\\b$kw\\b")) {
+                "<span style='color:#569cd6'>${it.value}</span>"
+            }
+        }
+
+        return escaped
+    }
+
 }
