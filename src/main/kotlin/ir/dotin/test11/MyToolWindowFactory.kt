@@ -37,6 +37,7 @@ class MyToolWindowFactory : ToolWindowFactory {
             wrapStyleWord = true
             font = Font("Monospaced", Font.PLAIN, 12)
         }
+
         val fullInputHolder = arrayOf("")
         val pastedCodeHolder = arrayOf("")
 
@@ -63,7 +64,6 @@ class MyToolWindowFactory : ToolWindowFactory {
                             val startLine = document.getLineNumber(index) + 1
                             val endOffset = index + inserted.trim().length
                             val endLine = document.getLineNumber(endOffset) + 1
-
                             val fileName = virtualFile?.name ?: "UnknownFile"
                             val fileRef = "$fileName (lines $startLine–$endLine):"
 
@@ -77,20 +77,18 @@ class MyToolWindowFactory : ToolWindowFactory {
                             else
                                 promptCandidate
 
-                            SwingUtilities.invokeLater {
-                                val updatedPrompt = if (fullInputHolder[0].isNotEmpty()) "${fullInputHolder[0]}\n\n$updatedPrompt" else updatedPrompt
-                                val updatedCode = if (pastedCodeHolder[0].isNotEmpty()) "${pastedCodeHolder[0]}\n\n// From $fileRef\n$inserted" else "// From $fileRef\n$inserted"
+                            val updatedCode = if (pastedCodeHolder[0].isNotEmpty())
+                                "${pastedCodeHolder[0]}\n\n// From $fileRef\n$inserted"
+                            else
+                                "// From $fileRef\n$inserted"
 
+                            SwingUtilities.invokeLater {
                                 inputArea.text = "$fileRef\n$updatedPrompt"
                                 inputArea.caretPosition = inputArea.document.length
 
-                                // Save accumulated content
                                 fullInputHolder[0] = updatedPrompt
                                 pastedCodeHolder[0] = updatedCode
                             }
-
-
-
                         }
                     }
                 }
@@ -125,33 +123,28 @@ class MyToolWindowFactory : ToolWindowFactory {
             font = Font("Monospaced", Font.PLAIN, 12)
         }
 
-        val scrollPane = JBScrollPane(resultPane)
+        val resultScrollPane = JBScrollPane(resultPane)
 
         val button = JButton("Ask ChatGPT")
-
         button.addActionListener {
             val rawPrompt = fullInputHolder[0].trim()
             val pastedCode = pastedCodeHolder[0].trim()
 
-// Remove any lines that look like "File.java (lines x–y):"
             val cleanedPrompt = rawPrompt.lines()
                 .filterNot { it.matches(Regex(".*\\(lines \\d+–\\d+\\):")) }
                 .joinToString("\n")
                 .trim()
-
 
             val input = if (cleanedPrompt.isNotEmpty() && pastedCode.isNotEmpty())
                 "$cleanedPrompt\n\n$pastedCode"
             else
                 inputArea.text.trim()
 
-
             if (input.isNotEmpty()) {
                 CoroutineScope(Dispatchers.IO).launch {
                     val response = queryChatGPT(input)
                     SwingUtilities.invokeLater {
-                        val formattedHtml = formatResponseText(response ?: "Error")
-                        resultPane.text = formattedHtml
+                        resultPane.text = formatResponseText(response ?: "Error")
                     }
                 }
             }
@@ -163,7 +156,7 @@ class MyToolWindowFactory : ToolWindowFactory {
         }
 
         panel.add(inputPanel, BorderLayout.NORTH)
-        panel.add(scrollPane, BorderLayout.CENTER)
+        panel.add(resultScrollPane, BorderLayout.CENTER)
 
         val content = ContentFactory.getInstance().createContent(panel, "", false)
         toolWindow.contentManager.addContent(content)
