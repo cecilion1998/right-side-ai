@@ -12,11 +12,9 @@ import kotlinx.coroutines.launch
 import okhttp3.*
 import java.awt.BorderLayout
 import java.awt.Dimension
-import com.intellij.openapi.editor.Document
 import javax.swing.*
 import com.google.gson.*
 import com.intellij.openapi.fileEditor.FileEditorManager
-import com.intellij.openapi.util.TextRange
 
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.ui.components.JBTextArea
@@ -25,6 +23,8 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.awt.Font
 import java.awt.event.FocusAdapter
 import java.awt.event.FocusEvent
+import com.intellij.openapi.editor.Document
+
 
 class MyToolWindowFactory : ToolWindowFactory {
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
@@ -38,6 +38,7 @@ class MyToolWindowFactory : ToolWindowFactory {
             font = Font("Monospaced", Font.PLAIN, 12)
         }
         val fullInputHolder = arrayOf("")
+        val pastedCodeHolder = arrayOf("")
 
         inputArea.document.addDocumentListener(object : javax.swing.event.DocumentListener {
             private var lastLength = 0
@@ -66,12 +67,30 @@ class MyToolWindowFactory : ToolWindowFactory {
                             val fileName = virtualFile?.name ?: "UnknownFile"
                             val fileRef = "$fileName (lines $startLine–$endLine):"
 
-                            val before = newText.substring(0, lastLength).trim()
+                            val promptCandidate = newText.substring(0, lastLength).lines()
+                                .filterNot { it.matches(Regex(".*\\(lines \\d+–\\d+\\):")) }
+                                .joinToString("\n")
+                                .trim()
+
+                            val updatedPrompt = if (fullInputHolder[0].isNotEmpty())
+                                "${fullInputHolder[0]}\n\n$promptCandidate"
+                            else
+                                promptCandidate
 
                             SwingUtilities.invokeLater {
-                                inputArea.text = "$fileRef\n$before"
+                                val updatedPrompt = if (fullInputHolder[0].isNotEmpty()) "${fullInputHolder[0]}\n\n$updatedPrompt" else updatedPrompt
+                                val updatedCode = if (pastedCodeHolder[0].isNotEmpty()) "${pastedCodeHolder[0]}\n\n// From $fileRef\n$inserted" else "// From $fileRef\n$inserted"
+
+                                inputArea.text = "$fileRef\n$updatedPrompt"
                                 inputArea.caretPosition = inputArea.document.length
+
+                                // Save accumulated content
+                                fullInputHolder[0] = updatedPrompt
+                                pastedCodeHolder[0] = updatedCode
                             }
+
+
+
                         }
                     }
                 }
@@ -83,9 +102,7 @@ class MyToolWindowFactory : ToolWindowFactory {
                 lastLength = inputArea.text.length
             }
 
-            override fun changedUpdate(e: javax.swing.event.DocumentEvent) {
-                // no-op for plain text
-            }
+            override fun changedUpdate(e: javax.swing.event.DocumentEvent) {}
         })
 
         inputArea.addFocusListener(object : FocusAdapter() {
@@ -113,11 +130,25 @@ class MyToolWindowFactory : ToolWindowFactory {
         val button = JButton("Ask ChatGPT")
 
         button.addActionListener {
-            val input = inputArea.text.trim()
+            val rawPrompt = fullInputHolder[0].trim()
+            val pastedCode = pastedCodeHolder[0].trim()
+
+// Remove any lines that look like "File.java (lines x–y):"
+            val cleanedPrompt = rawPrompt.lines()
+                .filterNot { it.matches(Regex(".*\\(lines \\d+–\\d+\\):")) }
+                .joinToString("\n")
+                .trim()
+
+
+            val input = if (cleanedPrompt.isNotEmpty() && pastedCode.isNotEmpty())
+                "$cleanedPrompt\n\n$pastedCode"
+            else
+                inputArea.text.trim()
+
+
             if (input.isNotEmpty()) {
                 CoroutineScope(Dispatchers.IO).launch {
-                    val cleaned = preprocessInput(input, project)
-                    val response = queryChatGPT(cleaned)
+                    val response = queryChatGPT(input)
                     SwingUtilities.invokeLater {
                         val formattedHtml = formatResponseText(response ?: "Error")
                         resultPane.text = formattedHtml
@@ -313,36 +344,6 @@ class MyToolWindowFactory : ToolWindowFactory {
         }
 
         return escaped
-    }
-    private fun preprocessInput(raw: String, project: Project): String {
-        val pattern = Regex("""^(.+\.java) \(lines (\d+)–(\d+)\):\s*(.+)$""")
-        val match = pattern.matchEntire(raw.trim())
-
-        if (match != null) {
-            val startLine = match.groupValues[2].toInt() - 1
-            val endLine = match.groupValues[3].toInt() - 1
-            val prompt = match.groupValues[4]
-
-            val editor = FileEditorManager.getInstance(project).selectedTextEditor
-            val document = editor?.document
-
-            if (document != null) {
-                val code = (startLine..endLine).joinToString("\n") { lineNum ->
-                    document.getLineSafe(lineNum) ?: ""
-                }
-
-                return "$prompt\n\n$code"
-            }
-        }
-
-        return raw
-    }
-    fun Document.getLineSafe(line: Int): String? {
-        return if (line in 0 until this.lineCount) {
-            val startOffset = getLineStartOffset(line)
-            val endOffset = getLineEndOffset(line)
-            getText(TextRange(startOffset, endOffset))
-        } else null
     }
 
 }
