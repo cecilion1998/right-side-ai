@@ -3,6 +3,7 @@ package ir.dotin.test11
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.content.ContentFactory
 import kotlinx.coroutines.CoroutineScope
@@ -13,6 +14,8 @@ import java.awt.BorderLayout
 import java.awt.Dimension
 import javax.swing.*
 import com.google.gson.*
+import com.intellij.openapi.editor.event.DocumentEvent
+import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.ui.components.JBTextArea
@@ -37,35 +40,51 @@ class MyToolWindowFactory : ToolWindowFactory {
         val fullInputHolder = arrayOf("")
 
         inputArea.document.addDocumentListener(object : javax.swing.event.DocumentListener {
-            override fun insertUpdate(e: javax.swing.event.DocumentEvent?) {
-                detectPasteAndReplace()
-            }
+            private var lastLength = 0
 
-            override fun removeUpdate(e: javax.swing.event.DocumentEvent?) {}
-            override fun changedUpdate(e: javax.swing.event.DocumentEvent?) {}
+            override fun insertUpdate(e: javax.swing.event.DocumentEvent) {
+                val newText = inputArea.text
+                val newLength = newText.length
 
-            private fun detectPasteAndReplace() {
-                val pasted = inputArea.text.trim()
+                if (newLength - lastLength > 10) {
+                    val inserted = newText.substring(lastLength, newLength)
 
-                if (pasted.lines().size > 1) {
-                    val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return
-                    val document = editor.document
-                    val selectionModel = editor.selectionModel
+                    if (inserted.lines().size > 1) {
+                        ApplicationManager.getApplication().runReadAction {
+                            val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return@runReadAction
+                            val document = editor.document
+                            val virtualFile = FileDocumentManager.getInstance().getFile(document)
+                            val fileText = document.text
 
-                    if (!selectionModel.hasSelection()) return
+                            val index = fileText.indexOf(inserted.trim())
+                            if (index == -1) return@runReadAction
 
-                    val startLine = document.getLineNumber(selectionModel.selectionStart) + 1
-                    val endLine = document.getLineNumber(selectionModel.selectionEnd) + 1
+                            val startLine = document.getLineNumber(index) + 1
+                            val endOffset = index + inserted.trim().length
+                            val endLine = document.getLineNumber(endOffset) + 1
 
-                    val virtualFile = FileDocumentManager.getInstance().getFile(document)
-                    val fileName = virtualFile?.name ?: "UnknownFile"
+                            val fileName = virtualFile?.name ?: "UnknownFile"
+                            val fileRef = "$fileName (lines $startLine–$endLine):"
 
-                    fullInputHolder[0] = pasted
+                            val before = newText.substring(0, lastLength).trim()
 
-                    SwingUtilities.invokeLater {
-                        inputArea.text = "$fileName (lines $startLine–$endLine)"
+                            SwingUtilities.invokeLater {
+                                inputArea.text = "$fileRef\n$before"
+                                inputArea.caretPosition = inputArea.document.length
+                            }
+                        }
                     }
                 }
+
+                lastLength = newLength
+            }
+
+            override fun removeUpdate(e: javax.swing.event.DocumentEvent) {
+                lastLength = inputArea.text.length
+            }
+
+            override fun changedUpdate(e: javax.swing.event.DocumentEvent) {
+                // no-op for plain text
             }
         })
 
