@@ -12,19 +12,19 @@ import kotlinx.coroutines.launch
 import okhttp3.*
 import java.awt.BorderLayout
 import java.awt.Dimension
+import com.intellij.openapi.editor.Document
 import javax.swing.*
 import com.google.gson.*
-import com.intellij.openapi.editor.event.DocumentEvent
-import com.intellij.openapi.editor.event.DocumentListener
-import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.util.TextRange
+
+import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.ui.components.JBTextArea
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.awt.Font
 import java.awt.event.FocusAdapter
 import java.awt.event.FocusEvent
-
 
 class MyToolWindowFactory : ToolWindowFactory {
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
@@ -113,10 +113,11 @@ class MyToolWindowFactory : ToolWindowFactory {
         val button = JButton("Ask ChatGPT")
 
         button.addActionListener {
-            val inputToSend = if (fullInputHolder[0].isNotEmpty()) fullInputHolder[0] else inputArea.text.trim()
-            if (inputToSend.isNotEmpty()) {
+            val input = inputArea.text.trim()
+            if (input.isNotEmpty()) {
                 CoroutineScope(Dispatchers.IO).launch {
-                    val response = queryChatGPT(inputToSend)
+                    val cleaned = preprocessInput(input, project)
+                    val response = queryChatGPT(cleaned)
                     SwingUtilities.invokeLater {
                         val formattedHtml = formatResponseText(response ?: "Error")
                         resultPane.text = formattedHtml
@@ -313,4 +314,35 @@ class MyToolWindowFactory : ToolWindowFactory {
 
         return escaped
     }
+    private fun preprocessInput(raw: String, project: Project): String {
+        val pattern = Regex("""^(.+\.java) \(lines (\d+)–(\d+)\):\s*(.+)$""")
+        val match = pattern.matchEntire(raw.trim())
+
+        if (match != null) {
+            val startLine = match.groupValues[2].toInt() - 1
+            val endLine = match.groupValues[3].toInt() - 1
+            val prompt = match.groupValues[4]
+
+            val editor = FileEditorManager.getInstance(project).selectedTextEditor
+            val document = editor?.document
+
+            if (document != null) {
+                val code = (startLine..endLine).joinToString("\n") { lineNum ->
+                    document.getLineSafe(lineNum) ?: ""
+                }
+
+                return "$prompt\n\n$code"
+            }
+        }
+
+        return raw
+    }
+    fun Document.getLineSafe(line: Int): String? {
+        return if (line in 0 until this.lineCount) {
+            val startOffset = getLineStartOffset(line)
+            val endOffset = getLineEndOffset(line)
+            getText(TextRange(startOffset, endOffset))
+        } else null
+    }
+
 }
