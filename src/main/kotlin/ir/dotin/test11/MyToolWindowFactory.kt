@@ -4,7 +4,6 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.components.JBScrollPane
-import com.intellij.ui.components.JBTextField
 import com.intellij.ui.content.ContentFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -14,10 +13,14 @@ import java.awt.BorderLayout
 import java.awt.Dimension
 import javax.swing.*
 import com.google.gson.*
+import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.ui.components.JBTextArea
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.awt.Font
+import java.awt.event.FocusAdapter
+import java.awt.event.FocusEvent
 
 
 class MyToolWindowFactory : ToolWindowFactory {
@@ -31,6 +34,48 @@ class MyToolWindowFactory : ToolWindowFactory {
             wrapStyleWord = true
             font = Font("Monospaced", Font.PLAIN, 12)
         }
+        val fullInputHolder = arrayOf("")
+
+        inputArea.document.addDocumentListener(object : javax.swing.event.DocumentListener {
+            override fun insertUpdate(e: javax.swing.event.DocumentEvent?) {
+                detectPasteAndReplace()
+            }
+
+            override fun removeUpdate(e: javax.swing.event.DocumentEvent?) {}
+            override fun changedUpdate(e: javax.swing.event.DocumentEvent?) {}
+
+            private fun detectPasteAndReplace() {
+                val pasted = inputArea.text.trim()
+
+                if (pasted.lines().size > 1) {
+                    val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return
+                    val document = editor.document
+                    val selectionModel = editor.selectionModel
+
+                    if (!selectionModel.hasSelection()) return
+
+                    val startLine = document.getLineNumber(selectionModel.selectionStart) + 1
+                    val endLine = document.getLineNumber(selectionModel.selectionEnd) + 1
+
+                    val virtualFile = FileDocumentManager.getInstance().getFile(document)
+                    val fileName = virtualFile?.name ?: "UnknownFile"
+
+                    fullInputHolder[0] = pasted
+
+                    SwingUtilities.invokeLater {
+                        inputArea.text = "$fileName (lines $startLine–$endLine)"
+                    }
+                }
+            }
+        })
+
+        inputArea.addFocusListener(object : FocusAdapter() {
+            override fun focusGained(e: FocusEvent?) {
+                if (fullInputHolder[0].isNotEmpty()) {
+                    inputArea.text = fullInputHolder[0]
+                }
+            }
+        })
 
         val inputScrollPane = JBScrollPane(inputArea).apply {
             verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
@@ -49,15 +94,12 @@ class MyToolWindowFactory : ToolWindowFactory {
         val button = JButton("Ask ChatGPT")
 
         button.addActionListener {
-            val input = inputArea.text.trim()
-            if (input.isNotEmpty()) {
+            val inputToSend = if (fullInputHolder[0].isNotEmpty()) fullInputHolder[0] else inputArea.text.trim()
+            if (inputToSend.isNotEmpty()) {
                 CoroutineScope(Dispatchers.IO).launch {
-                    val response = queryChatGPT(input)
+                    val response = queryChatGPT(inputToSend)
                     SwingUtilities.invokeLater {
                         val formattedHtml = formatResponseText(response ?: "Error")
-                        println("=== HTML OUTPUT START ===")
-                        println(formattedHtml)
-                        println("=== HTML OUTPUT END ===")
                         resultPane.text = formattedHtml
                     }
                 }
