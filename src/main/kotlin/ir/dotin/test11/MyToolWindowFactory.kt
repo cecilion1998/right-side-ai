@@ -14,6 +14,7 @@ import java.awt.BorderLayout
 import java.awt.Dimension
 import javax.swing.*
 import com.google.gson.*
+import com.intellij.ui.components.JBTextArea
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.awt.Font
@@ -22,20 +23,33 @@ import java.awt.Font
 class MyToolWindowFactory : ToolWindowFactory {
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         val panel = JPanel(BorderLayout(10, 10))
-        val inputField = JBTextField()
+
+        val inputArea = JBTextArea().apply {
+            rows = 5
+            columns = 30
+            lineWrap = true
+            wrapStyleWord = true
+            font = Font("Monospaced", Font.PLAIN, 12)
+        }
+
+        val inputScrollPane = JBScrollPane(inputArea).apply {
+            verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
+            horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
+            preferredSize = Dimension(400, inputArea.preferredSize.height)
+        }
+
         val resultPane = JEditorPane("text/html", "").apply {
             isEditable = false
             putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, true)
             font = Font("Monospaced", Font.PLAIN, 12)
         }
 
-
-
         val scrollPane = JBScrollPane(resultPane)
+
         val button = JButton("Ask ChatGPT")
 
         button.addActionListener {
-            val input = inputField.text.trim()
+            val input = inputArea.text.trim()
             if (input.isNotEmpty()) {
                 CoroutineScope(Dispatchers.IO).launch {
                     val response = queryChatGPT(input)
@@ -50,21 +64,17 @@ class MyToolWindowFactory : ToolWindowFactory {
             }
         }
 
-        val inputPanel = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.X_AXIS)
-            add(inputField)
-            add(Box.createHorizontalStrut(10))
-            add(button)
+        val inputPanel = JPanel(BorderLayout()).apply {
+            add(inputScrollPane, BorderLayout.CENTER)
+            add(button, BorderLayout.EAST)
         }
 
-        inputField.preferredSize = Dimension(200, 30)
         panel.add(inputPanel, BorderLayout.NORTH)
         panel.add(scrollPane, BorderLayout.CENTER)
 
         val content = ContentFactory.getInstance().createContent(panel, "", false)
         toolWindow.contentManager.addContent(content)
     }
-
     private val apiKey: String by lazy {
         val props = java.util.Properties()
         val inputStream = javaClass.classLoader.getResourceAsStream("config.properties")
@@ -72,7 +82,6 @@ class MyToolWindowFactory : ToolWindowFactory {
         props.load(inputStream)
         props.getProperty("openai.api.key") ?: throw IllegalStateException("API key not set in config.properties")
     }
-
     private fun queryChatGPT(inputText: String): String? {
 
         val url = "https://api.openai.com/v1/responses"
@@ -243,5 +252,4 @@ class MyToolWindowFactory : ToolWindowFactory {
 
         return escaped
     }
-
 }
