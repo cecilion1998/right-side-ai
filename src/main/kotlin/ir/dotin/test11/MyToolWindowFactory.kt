@@ -44,67 +44,66 @@ class MyToolWindowFactory : ToolWindowFactory {
 
         inputArea.document.addDocumentListener(object : javax.swing.event.DocumentListener {
             private var lastLength = 0
+            private val lineRefRegex = Regex(".*\\(lines \\d+–\\d+\\)")
+            private var updatedPrompt = ""
 
             override fun insertUpdate(e: javax.swing.event.DocumentEvent) {
                 val newText = inputArea.text
                 val newLength = newText.length
 
-                if (newLength - lastLength > 10) {
-                    val inserted = newText.substring(lastLength, newLength)
+                // Detect inserted content
+                val inserted = if (newLength > lastLength) newText.substring(lastLength, newLength) else return
 
-                    if (inserted.lines().size > 1) {
-                        ApplicationManager.getApplication().runReadAction {
-                            val editor =
-                                FileEditorManager.getInstance(project).selectedTextEditor ?: return@runReadAction
-                            val document = editor.document
-                            val virtualFile = FileDocumentManager.getInstance().getFile(document)
-                            val fileText = document.text
-
-                            val index = fileText.indexOf(inserted.trim())
-                            if (index == -1) return@runReadAction
-
-                            val startLine = document.getLineNumber(index) + 1
-                            val endOffset = index + inserted.trim().length
-                            val endLine = document.getLineNumber(endOffset) + 1
-                            val fileName = virtualFile?.name ?: "UnknownFile"
-                            val fileRef = "$fileName (lines $startLine–$endLine):"
-
-                            val updatedCode = if (pastedCodeHolder[0].isNotEmpty())
-                                "${pastedCodeHolder[0]}\n\n// From $fileRef\n$inserted"
-                            else
-                                "// From $fileRef\n$inserted"
-
-                            SwingUtilities.invokeLater {
-                                // Extract existing file refs (if any)
-                                val existingRefs = inputArea.text
-                                    .lines()
-                                    .filter { it.matches(Regex(".*\\(lines \\d+–\\d+\\)")) }
-                                    .toMutableList()
-
-                                // Add new ref if not already present
-                                val cleanFileRef = fileRef.removeSuffix(":")
-                                if (!existingRefs.contains(cleanFileRef)) {
-                                    existingRefs.add(cleanFileRef)
-                                }
-
-                                // Join and append prompt
-                                inputArea.text = (existingRefs + "").joinToString("\n")
-                                inputArea.caretPosition = inputArea.document.length
-
-                                pastedCodeHolder[0] = updatedCode
-                            }
-                        }
-                    }
-                    lastLength = newLength
-                } else if (newLength - lastLength == 1) {
-                    val inserted = newText.substring(lastLength, newLength)
-                    ApplicationManager.getApplication().runReadAction {
-                        updatedPrompt = updatedPrompt + inserted
-                    }
+                if (inserted.lines().size > 1) {
+                    // Paste detected: handle as code block
+                    handleCodePaste(inserted.trim())
+                } else if (inserted.length == 1) {
+                    // Single character: treat as prompt
+                    updatedPrompt += inserted
                     fullInputHolder[0] = updatedPrompt
-                    lastLength = newLength
+                }
+
+                lastLength = newLength
+            }
+
+            private fun handleCodePaste(trimmedInsert: String) {
+                ApplicationManager.getApplication().runReadAction {
+                    val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return@runReadAction
+                    val document = editor.document
+                    val virtualFile = FileDocumentManager.getInstance().getFile(document)
+                    val fileText = document.text
+
+                    val index = fileText.indexOf(trimmedInsert)
+                    if (index == -1) return@runReadAction
+
+                    val startLine = document.getLineNumber(index) + 1
+                    val endOffset = index + trimmedInsert.length
+                    val endLine = document.getLineNumber(endOffset) + 1
+                    val fileName = virtualFile?.name ?: "UnknownFile"
+                    val fileRef = "$fileName (lines $startLine–$endLine)"
+
+                    val formattedBlock = "// From $fileRef\n$trimmedInsert"
+                    val updatedCode = if (pastedCodeHolder[0].isNotEmpty())
+                        "${pastedCodeHolder[0]}\n\n$formattedBlock"
+                    else
+                        formattedBlock
+
+                    SwingUtilities.invokeLater {
+                        val existingRefs = inputArea.text
+                            .lines()
+                            .filter { it.matches(lineRefRegex) }
+                            .toMutableSet()
+
+                        existingRefs.add(fileRef)
+                        val referencesBlock = existingRefs.joinToString("\n")
+
+                        inputArea.text = "$referencesBlock\n\n"
+                        inputArea.caretPosition = inputArea.document.length
+                        pastedCodeHolder[0] = updatedCode
+                    }
                 }
             }
+
             override fun removeUpdate(e: javax.swing.event.DocumentEvent) {
                 lastLength = inputArea.text.length
             }
