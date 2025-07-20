@@ -68,7 +68,7 @@ class MyToolWindowFactory : ToolWindowFactory {
                             val fileRef = "$fileName (lines $startLine–$endLine):"
 
                             val promptCandidate = newText.substring(0, lastLength).lines()
-                                .filterNot { it.matches(Regex(".*\\(lines \\d+–\\d+\\):")) }
+                                .filterNot { it.matches(Regex(".*\\(lines \\d+–\\d+\\)")) }
                                 .joinToString("\n")
                                 .trim()
 
@@ -83,7 +83,20 @@ class MyToolWindowFactory : ToolWindowFactory {
                                 "// From $fileRef\n$inserted"
 
                             SwingUtilities.invokeLater {
-                                inputArea.text = "$fileRef\n$updatedPrompt"
+                                // Extract existing file refs (if any)
+                                val existingRefs = inputArea.text
+                                    .lines()
+                                    .filter { it.matches(Regex(".*\\(lines \\d+–\\d+\\)")) }
+                                    .toMutableList()
+
+                                // Add new ref if not already present
+                                val cleanFileRef = fileRef.removeSuffix(":")
+                                if (!existingRefs.contains(cleanFileRef)) {
+                                    existingRefs.add(cleanFileRef)
+                                }
+
+                                // Join and append prompt
+                                inputArea.text = (existingRefs + "").joinToString("\n") + "\n\n" + updatedPrompt
                                 inputArea.caretPosition = inputArea.document.length
 
                                 fullInputHolder[0] = updatedPrompt
@@ -131,7 +144,7 @@ class MyToolWindowFactory : ToolWindowFactory {
             val pastedCode = pastedCodeHolder[0].trim()
 
             val cleanedPrompt = rawPrompt.lines()
-                .filterNot { it.matches(Regex(".*\\(lines \\d+–\\d+\\):")) }
+                .filterNot { it.matches(Regex(".*\\(lines \\d+–\\d+\\)")) }
                 .joinToString("\n")
                 .trim()
 
