@@ -40,6 +40,7 @@ class MyToolWindowFactory : ToolWindowFactory {
 
         val fullInputHolder = arrayOf("")
         val pastedCodeHolder = arrayOf("")
+        var updatedPrompt = ""
 
         inputArea.document.addDocumentListener(object : javax.swing.event.DocumentListener {
             private var lastLength = 0
@@ -53,7 +54,8 @@ class MyToolWindowFactory : ToolWindowFactory {
 
                     if (inserted.lines().size > 1) {
                         ApplicationManager.getApplication().runReadAction {
-                            val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return@runReadAction
+                            val editor =
+                                FileEditorManager.getInstance(project).selectedTextEditor ?: return@runReadAction
                             val document = editor.document
                             val virtualFile = FileDocumentManager.getInstance().getFile(document)
                             val fileText = document.text
@@ -66,16 +68,6 @@ class MyToolWindowFactory : ToolWindowFactory {
                             val endLine = document.getLineNumber(endOffset) + 1
                             val fileName = virtualFile?.name ?: "UnknownFile"
                             val fileRef = "$fileName (lines $startLine–$endLine):"
-
-                            val promptCandidate = newText.substring(0, lastLength).lines()
-                                .filterNot { it.matches(Regex(".*\\(lines \\d+–\\d+\\)")) }
-                                .joinToString("\n")
-                                .trim()
-
-                            val updatedPrompt = if (fullInputHolder[0].isNotEmpty())
-                                "${fullInputHolder[0]}\n\n$promptCandidate"
-                            else
-                                promptCandidate
 
                             val updatedCode = if (pastedCodeHolder[0].isNotEmpty())
                                 "${pastedCodeHolder[0]}\n\n// From $fileRef\n$inserted"
@@ -96,19 +88,23 @@ class MyToolWindowFactory : ToolWindowFactory {
                                 }
 
                                 // Join and append prompt
-                                inputArea.text = (existingRefs + "").joinToString("\n") + "\n\n" + updatedPrompt
+                                inputArea.text = (existingRefs + "").joinToString("\n")
                                 inputArea.caretPosition = inputArea.document.length
 
-                                fullInputHolder[0] = updatedPrompt
                                 pastedCodeHolder[0] = updatedCode
                             }
                         }
                     }
+                    lastLength = newLength
+                } else if (newLength - lastLength == 1) {
+                    val inserted = newText.substring(lastLength, newLength)
+                    ApplicationManager.getApplication().runReadAction {
+                        updatedPrompt = updatedPrompt + inserted
+                    }
+                    fullInputHolder[0] = updatedPrompt
+                    lastLength = newLength
                 }
-
-                lastLength = newLength
             }
-
             override fun removeUpdate(e: javax.swing.event.DocumentEvent) {
                 lastLength = inputArea.text.length
             }
