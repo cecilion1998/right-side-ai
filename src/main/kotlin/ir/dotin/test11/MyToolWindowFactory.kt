@@ -275,15 +275,20 @@ class MyToolWindowFactory : ToolWindowFactory {
         for (line in raw.lines()) {
             when {
                 line.trim() == "```" -> {
-                    builder.append("</pre>")
-                    inCodeBlock = false
-                    codeLanguage = ""
+                    if (inCodeBlock) {
+                        builder.append("</pre>")
+                        inCodeBlock = false
+                        codeLanguage = ""
+                    }
                 }
 
                 line.trim().startsWith("```java") || line.trim().startsWith("```bash") -> {
-                    codeLanguage = line.trim().removePrefix("```").lowercase()
-                    builder.append("<pre style=\"background-color:#3c3f41; color:#a9b7c6; padding:10px; border-radius: 4px;\">")
-                    inCodeBlock = true
+                    if (!inCodeBlock) {
+                        codeLanguage = line.trim().removePrefix("```").lowercase()
+                        // *** FIX: Removed unsupported 'border-radius' property ***
+                        builder.append("<pre style=\"background-color:#3c3f41; color:#a9b7c6; padding:10px;\">")
+                        inCodeBlock = true
+                    }
                 }
 
                 inCodeBlock -> {
@@ -309,6 +314,10 @@ class MyToolWindowFactory : ToolWindowFactory {
                     builder.append("<div>${escapeHtml(line)}</div>")
                 }
             }
+        }
+
+        if (inCodeBlock) {
+            builder.append("</pre>")
         }
 
         builder.append("</body></html>")
