@@ -30,6 +30,7 @@ class MyToolWindowFactory : ToolWindowFactory {
         val mainPanel = JPanel(BorderLayout(10, 10))
         val chatPanel = JPanel()
         chatPanel.layout = BoxLayout(chatPanel, BoxLayout.Y_AXIS)
+        chatPanel.background = Color(43, 43, 43) // Dark background for the chat panel
 
         val inputArea = JBTextArea().apply {
             rows = 5
@@ -143,21 +144,25 @@ class MyToolWindowFactory : ToolWindowFactory {
     private fun createSnippetComponent(snippet: CodeSnippet, onRemove: (JComponent) -> Unit): JComponent {
         val panel = JPanel(BorderLayout(5, 5))
         panel.border = BorderFactory.createCompoundBorder(
-            BorderFactory.createMatteBorder(0, 0, 1, 0, Color.LIGHT_GRAY),
+            BorderFactory.createMatteBorder(0, 0, 1, 0, Color.DARK_GRAY),
             BorderFactory.createEmptyBorder(10, 10, 10, 10)
         )
         panel.maximumSize = Dimension(Integer.MAX_VALUE, 150) // Constrain height
         panel.alignmentX = Component.LEFT_ALIGNMENT
+        panel.background = Color(43, 43, 43)
 
         // Top panel for file info and remove button
         val topPanel = JPanel(BorderLayout())
+        topPanel.background = Color(43, 43, 43)
         val fileLabel = JLabel("${snippet.fileName} (lines ${snippet.startLine}-${snippet.endLine})")
         fileLabel.font = fileLabel.font.deriveFont(Font.BOLD)
+        fileLabel.foreground = Color(169, 183, 198)
 
         val removeButton = JButton("x").apply {
             isContentAreaFilled = false
             isFocusPainted = false
             border = BorderFactory.createEmptyBorder(2, 5, 2, 5)
+            foreground = Color(169, 183, 198)
             addActionListener {
                 onRemove(panel)
             }
@@ -165,20 +170,39 @@ class MyToolWindowFactory : ToolWindowFactory {
         topPanel.add(fileLabel, BorderLayout.CENTER)
         topPanel.add(removeButton, BorderLayout.EAST)
 
-        // Text area for the code
-        val codeArea = JTextArea(snippet.code).apply {
+        // JEditorPane for syntax-highlighted code
+        val codePane = JEditorPane("text/html", formatCodeToHtml(snippet)).apply {
             isEditable = false
-            lineWrap = true
-            wrapStyleWord = true
-            font = Font("Monospaced", Font.PLAIN, 12)
-            background = Color(245, 245, 245) // Light gray background
-            border = BorderFactory.createEmptyBorder(5, 5, 5, 5)
+            putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, true)
+            background = Color(43, 43, 43)
         }
 
         panel.add(topPanel, BorderLayout.NORTH)
-        panel.add(JBScrollPane(codeArea), BorderLayout.CENTER)
+        panel.add(JBScrollPane(codePane), BorderLayout.CENTER)
 
         return panel
+    }
+
+    private fun formatCodeToHtml(snippet: CodeSnippet): String {
+        val language = when {
+            snippet.fileName.endsWith(".java") || snippet.fileName.endsWith(".kt") -> "java"
+            snippet.fileName.endsWith(".sh") -> "bash"
+            else -> ""
+        }
+
+        val highlightedCode = when (language) {
+            "java" -> highlightJava(snippet.code)
+            "bash" -> highlightBash(snippet.code)
+            else -> escapeHtml(snippet.code)
+        }
+
+        return """
+            <html>
+                <body style="font-family: monospace; font-size: 12px; background-color: #2b2b2b; color: #a9b7c6;">
+                    <pre style="margin: 0; padding: 5px;">$highlightedCode</pre>
+                </body>
+            </html>
+        """.trimIndent()
     }
 
     // Your existing queryChatGPT, formatResponseText, and other helper methods remain here.
@@ -242,12 +266,8 @@ class MyToolWindowFactory : ToolWindowFactory {
         return codeKeywords.any { text.contains(it) } || text.contains("{") && text.contains("}")
     }
     private fun formatResponseText(raw: String): String {
-        println("=== RAW RESPONSE START ===")
-        println(raw)
-        println("=== RAW RESPONSE END ===")
-
         val builder = StringBuilder()
-        builder.append("<html><body style=\"font-family: monospace; font-size: 12px;\">")
+        builder.append("<html><body style=\"font-family: monospace; font-size: 12px; background-color: #2b2b2b; color: #a9b7c6;\">")
 
         var inCodeBlock = false
         var codeLanguage = ""
@@ -262,7 +282,7 @@ class MyToolWindowFactory : ToolWindowFactory {
 
                 line.trim().startsWith("```java") || line.trim().startsWith("```bash") -> {
                     codeLanguage = line.trim().removePrefix("```").lowercase()
-                    builder.append("<pre style=\"background-color:#1e1e1e; color:#dcdcdc; padding:10px;\">")
+                    builder.append("<pre style=\"background-color:#3c3f41; color:#a9b7c6; padding:10px; border-radius: 4px;\">")
                     inCodeBlock = true
                 }
 
@@ -286,7 +306,7 @@ class MyToolWindowFactory : ToolWindowFactory {
                 }
 
                 else -> {
-                    builder.append("<div>${line}</div>")
+                    builder.append("<div>${escapeHtml(line)}</div>")
                 }
             }
         }
@@ -302,23 +322,23 @@ class MyToolWindowFactory : ToolWindowFactory {
 
         // Highlight comments
         escaped = escaped.replace(Regex("#.*")) {
-            "<span style='color:#6a9955'>${it.value}</span>"
+            "<span style='color:#808080'>${it.value}</span>"
         }
 
         // Highlight strings
         escaped = escaped.replace(Regex("\"(.*?)\"")) {
-            "<span style='color:#ce9178'>&quot;${it.groupValues[1]}&quot;</span>"
+            "<span style='color:#6A8759'>&quot;${it.groupValues[1]}&quot;</span>"
         }
 
         // Highlight variables
         escaped = escaped.replace(variables) {
-            "<span style='color:#dcdcaa'>${it.value}</span>"
+            "<span style='color:#9876AA'>${it.value}</span>"
         }
 
         // Highlight keywords
         for (kw in keywords) {
             escaped = escaped.replace(Regex("\\b$kw\\b")) {
-                "<span style='color:#569cd6'>${it.value}</span>"
+                "<span style='color:#CC7832'>${it.value}</span>"
             }
         }
 
@@ -333,28 +353,26 @@ class MyToolWindowFactory : ToolWindowFactory {
     private fun highlightJava(code: String): String {
         val keywords = listOf(
             "public", "class", "static", "void", "int", "long", "if", "else",
-            "return", "new", "private", "protected", "boolean", "String"
+            "return", "new", "private", "protected", "boolean", "String",
+            "package", "import", "override", "fun", "val", "var"
         )
 
-        var escaped = code
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
+        var escaped = escapeHtml(code)
 
         // Highlight strings
         escaped = escaped.replace(Regex("\"(.*?)\"")) {
-            "<span style='color:#ce9178'>&quot;${it.groupValues[1]}&quot;</span>"
+            "<span style='color:#6A8759'>&quot;${it.groupValues[1]}&quot;</span>"
         }
 
         // Highlight comments
         escaped = escaped.replace(Regex("(//.*)$")) {
-            "<span style='color:#6a9955'>${it.groupValues[1]}</span>"
+            "<span style='color:#808080'>${it.groupValues[1]}</span>"
         }
 
         // Highlight keywords
         for (kw in keywords) {
             escaped = escaped.replace(Regex("\\b$kw\\b")) {
-                "<span style='color:#569cd6'>${it.value}</span>"
+                "<span style='color:#CC7832'>${it.value}</span>"
             }
         }
 
