@@ -1,174 +1,188 @@
 package ir.dotin.test11
 
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.editor.Document
+import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
-import com.intellij.openapi.application.ApplicationManager
 import com.intellij.ui.components.JBScrollPane
+import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.content.ContentFactory
+import com.google.gson.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import okhttp3.*
-import java.awt.BorderLayout
-import java.awt.Dimension
-import javax.swing.*
-import com.google.gson.*
-import com.intellij.openapi.fileEditor.FileEditorManager
-
-import com.intellij.openapi.fileEditor.FileDocumentManager
-import com.intellij.ui.components.JBTextArea
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.awt.Font
-import java.awt.event.FocusAdapter
-import java.awt.event.FocusEvent
-import com.intellij.openapi.editor.Document
-
+import java.awt.*
+import javax.swing.*
+import javax.swing.event.DocumentEvent
+import javax.swing.event.DocumentListener
 
 class MyToolWindowFactory : ToolWindowFactory {
+
+    private val pastedCodeSnippets = mutableListOf<CodeSnippet>()
+
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
-        val panel = JPanel(BorderLayout(10, 10))
+        val mainPanel = JPanel(BorderLayout(10, 10))
+        val chatPanel = JPanel()
+        chatPanel.layout = BoxLayout(chatPanel, BoxLayout.Y_AXIS)
 
         val inputArea = JBTextArea().apply {
             rows = 5
-            columns = 30
             lineWrap = true
             wrapStyleWord = true
             font = Font("Monospaced", Font.PLAIN, 12)
         }
 
-        val fullInputHolder = arrayOf("")
-        val pastedCodeHolder = arrayOf("")
-        var updatedPrompt = ""
-
-        inputArea.document.addDocumentListener(object : javax.swing.event.DocumentListener {
-            private var lastLength = 0
-            private val lineRefRegex = Regex(".*\\(lines \\d+–\\d+\\)")
-            private var updatedPrompt = ""
-
-            override fun insertUpdate(e: javax.swing.event.DocumentEvent) {
+        // Listener to detect pasted code
+        inputArea.document.addDocumentListener(object : DocumentListener {
+            override fun insertUpdate(e: DocumentEvent) {
                 val newText = inputArea.text
-                val newLength = newText.length
-
-                // Detect inserted content
-                val inserted = if (newLength > lastLength) newText.substring(lastLength, newLength) else return
-
-                if (inserted.lines().size > 1) {
-                    // Paste detected: handle as code block
-                    handleCodePaste(inserted.trim())
-                } else if (inserted.length == 1) {
-                    // Single character: treat as prompt
-                    updatedPrompt += inserted
-                    fullInputHolder[0] = updatedPrompt
-                }
-
-                lastLength = newLength
-            }
-
-            private fun handleCodePaste(trimmedInsert: String) {
-                ApplicationManager.getApplication().runReadAction {
-                    val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return@runReadAction
-                    val document = editor.document
-                    val virtualFile = FileDocumentManager.getInstance().getFile(document)
-                    val fileText = document.text
-
-                    val index = fileText.indexOf(trimmedInsert)
-                    if (index == -1) return@runReadAction
-
-                    val startLine = document.getLineNumber(index) + 1
-                    val endOffset = index + trimmedInsert.length
-                    val endLine = document.getLineNumber(endOffset) + 1
-                    val fileName = virtualFile?.name ?: "UnknownFile"
-                    val fileRef = "$fileName (lines $startLine–$endLine)"
-
-                    val formattedBlock = "// From $fileRef\n$trimmedInsert"
-                    val updatedCode = if (pastedCodeHolder[0].isNotEmpty())
-                        "${pastedCodeHolder[0]}\n\n$formattedBlock"
-                    else
-                        formattedBlock
-
+                if (newText.lines().size > 1) { // Simple check for multi-line paste
                     SwingUtilities.invokeLater {
-                        val existingRefs = inputArea.text
-                            .lines()
-                            .filter { it.matches(lineRefRegex) }
-                            .toMutableSet()
-
-                        existingRefs.add(fileRef)
-                        val referencesBlock = existingRefs.joinToString("\n")
-
-                        inputArea.text = "$referencesBlock\n\n"
-                        inputArea.caretPosition = inputArea.document.length
-                        pastedCodeHolder[0] = updatedCode
+                        handleCodePaste(project, newText, chatPanel)
+                        inputArea.text = "" // Clear input area after processing
                     }
                 }
             }
-
-            override fun removeUpdate(e: javax.swing.event.DocumentEvent) {
-                lastLength = inputArea.text.length
-            }
-
-            override fun changedUpdate(e: javax.swing.event.DocumentEvent) {}
+            override fun removeUpdate(e: DocumentEvent) {}
+            override fun changedUpdate(e: DocumentEvent) {}
         })
-
-        inputArea.addFocusListener(object : FocusAdapter() {
-            override fun focusGained(e: FocusEvent?) {
-                if (fullInputHolder[0].isNotEmpty()) {
-                    inputArea.text = fullInputHolder[0]
-                }
-            }
-        })
-
-        val inputScrollPane = JBScrollPane(inputArea).apply {
-            verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
-            horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
-            preferredSize = Dimension(400, inputArea.preferredSize.height)
-        }
 
         val resultPane = JEditorPane("text/html", "").apply {
             isEditable = false
             putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, true)
-            font = Font("Monospaced", Font.PLAIN, 12)
         }
-
-        val resultScrollPane = JBScrollPane(resultPane)
 
         val button = JButton("Ask ChatGPT")
         button.addActionListener {
-            val rawPrompt = fullInputHolder[0].trim()
-            val pastedCode = pastedCodeHolder[0].trim()
+            val prompt = inputArea.text.trim()
+            val fullPrompt = StringBuilder(prompt)
 
-            val cleanedPrompt = rawPrompt.lines()
-                .filterNot { it.matches(Regex(".*\\(lines \\d+–\\d+\\)")) }
-                .joinToString("\n")
-                .trim()
+            if (pastedCodeSnippets.isNotEmpty()) {
+                fullPrompt.append("\n\n--- Code Snippets ---\n")
+                pastedCodeSnippets.forEach { snippet ->
+                    fullPrompt.append("\n// From ${snippet.fileName} (lines ${snippet.startLine}-${snippet.endLine})\n")
+                    fullPrompt.append(snippet.code)
+                }
+            }
 
-            val input = if (cleanedPrompt.isNotEmpty() && pastedCode.isNotEmpty())
-                "$cleanedPrompt\n\n$pastedCode"
-            else
-                inputArea.text.trim()
+            if (fullPrompt.isNotBlank()) {
+                // Clear the UI and the list for the next interaction
+                chatPanel.removeAll()
+                chatPanel.revalidate()
+                chatPanel.repaint()
+                pastedCodeSnippets.clear()
 
-            if (input.isNotEmpty()) {
                 CoroutineScope(Dispatchers.IO).launch {
-                    val response = queryChatGPT(input)
+                    val response = queryChatGPT(fullPrompt.toString())
                     SwingUtilities.invokeLater {
-                        resultPane.text = formatResponseText(response ?: "Error")
+                        resultPane.text = formatResponseText(response ?: "Error receiving response.")
                     }
                 }
             }
         }
 
-        val inputPanel = JPanel(BorderLayout()).apply {
-            add(inputScrollPane, BorderLayout.CENTER)
-            add(button, BorderLayout.EAST)
+        val inputScrollPane = JBScrollPane(inputArea)
+        val resultScrollPane = JBScrollPane(resultPane)
+
+        val bottomPanel = JPanel(BorderLayout())
+        bottomPanel.add(inputScrollPane, BorderLayout.CENTER)
+        bottomPanel.add(button, BorderLayout.EAST)
+
+        val chatScrollPane = JBScrollPane(chatPanel).apply {
+            verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
+            horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
         }
 
-        panel.add(inputPanel, BorderLayout.NORTH)
-        panel.add(resultScrollPane, BorderLayout.CENTER)
+        mainPanel.add(chatScrollPane, BorderLayout.CENTER)
+        mainPanel.add(bottomPanel, BorderLayout.SOUTH)
+        mainPanel.add(resultScrollPane, BorderLayout.NORTH)
 
-        val content = ContentFactory.getInstance().createContent(panel, "", false)
+
+        val content = ContentFactory.getInstance().createContent(mainPanel, "", false)
         toolWindow.contentManager.addContent(content)
     }
+
+    private fun handleCodePaste(project: Project, code: String, container: JPanel) {
+        ApplicationManager.getApplication().runReadAction {
+            val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return@runReadAction
+            val document = editor.document
+            val file = FileDocumentManager.getInstance().getFile(document) ?: return@runReadAction
+            val fileText = document.text
+
+            val startIndex = fileText.indexOf(code.trim())
+            if (startIndex != -1) {
+                val startLine = document.getLineNumber(startIndex) + 1
+                val endLine = document.getLineNumber(startIndex + code.trim().length) + 1
+                val fileName = file.name
+
+                val snippet = CodeSnippet(fileName, startLine, endLine, code.trim())
+                pastedCodeSnippets.add(snippet)
+
+                // Create and add the UI component for the snippet
+                SwingUtilities.invokeLater {
+                    val snippetComponent = createSnippetComponent(snippet) {
+                        pastedCodeSnippets.remove(snippet)
+                        container.remove(it)
+                        container.revalidate()
+                        container.repaint()
+                    }
+                    container.add(snippetComponent)
+                    container.revalidate()
+                    container.repaint()
+                }
+            }
+        }
+    }
+
+    private fun createSnippetComponent(snippet: CodeSnippet, onRemove: (JComponent) -> Unit): JComponent {
+        val panel = JPanel(BorderLayout(5, 5))
+        panel.border = BorderFactory.createCompoundBorder(
+            BorderFactory.createMatteBorder(0, 0, 1, 0, Color.LIGHT_GRAY),
+            BorderFactory.createEmptyBorder(10, 10, 10, 10)
+        )
+        panel.maximumSize = Dimension(Integer.MAX_VALUE, 150) // Constrain height
+        panel.alignmentX = Component.LEFT_ALIGNMENT
+
+        // Top panel for file info and remove button
+        val topPanel = JPanel(BorderLayout())
+        val fileLabel = JLabel("${snippet.fileName} (lines ${snippet.startLine}-${snippet.endLine})")
+        fileLabel.font = fileLabel.font.deriveFont(Font.BOLD)
+
+        val removeButton = JButton("x").apply {
+            isContentAreaFilled = false
+            isFocusPainted = false
+            border = BorderFactory.createEmptyBorder(2, 5, 2, 5)
+            addActionListener {
+                onRemove(panel)
+            }
+        }
+        topPanel.add(fileLabel, BorderLayout.CENTER)
+        topPanel.add(removeButton, BorderLayout.EAST)
+
+        // Text area for the code
+        val codeArea = JTextArea(snippet.code).apply {
+            isEditable = false
+            lineWrap = true
+            wrapStyleWord = true
+            font = Font("Monospaced", Font.PLAIN, 12)
+            background = Color(245, 245, 245) // Light gray background
+            border = BorderFactory.createEmptyBorder(5, 5, 5, 5)
+        }
+
+        panel.add(topPanel, BorderLayout.NORTH)
+        panel.add(JBScrollPane(codeArea), BorderLayout.CENTER)
+
+        return panel
+    }
+
+    // Your existing queryChatGPT, formatResponseText, and other helper methods remain here.
+    // Make sure to add them back in.
     private val apiKey: String by lazy {
         val props = java.util.Properties()
         val inputStream = javaClass.classLoader.getResourceAsStream("config.properties")
@@ -346,5 +360,11 @@ class MyToolWindowFactory : ToolWindowFactory {
 
         return escaped
     }
-
 }
+
+data class CodeSnippet(
+    val fileName: String,
+    val startLine: Int,
+    val endLine: Int,
+    val code: String
+)
