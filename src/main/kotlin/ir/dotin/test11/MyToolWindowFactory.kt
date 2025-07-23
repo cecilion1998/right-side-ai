@@ -1,7 +1,7 @@
 package ir.dotin.test11
 
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.editor.Document
+import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
@@ -25,12 +25,13 @@ import javax.swing.event.DocumentListener
 class MyToolWindowFactory : ToolWindowFactory {
 
     private val pastedCodeSnippets = mutableListOf<CodeSnippet>()
+    private var lastRawResponse: String? = null
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         val mainPanel = JPanel(BorderLayout(10, 10))
         val chatPanel = JPanel()
         chatPanel.layout = BoxLayout(chatPanel, BoxLayout.Y_AXIS)
-        chatPanel.background = Color(43, 43, 43) // Dark background for the chat panel
+        chatPanel.background = Color(43, 43, 43)
 
         val inputArea = JBTextArea().apply {
             rows = 5
@@ -39,14 +40,13 @@ class MyToolWindowFactory : ToolWindowFactory {
             font = Font("Monospaced", Font.PLAIN, 12)
         }
 
-        // Listener to detect pasted code
         inputArea.document.addDocumentListener(object : DocumentListener {
             override fun insertUpdate(e: DocumentEvent) {
                 val newText = inputArea.text
-                if (newText.lines().size > 1) { // Simple check for multi-line paste
+                if (newText.lines().size > 1) {
                     SwingUtilities.invokeLater {
                         handleCodePaste(project, newText, chatPanel)
-                        inputArea.text = "" // Clear input area after processing
+                        inputArea.text = ""
                     }
                 }
             }
@@ -57,7 +57,13 @@ class MyToolWindowFactory : ToolWindowFactory {
         val resultPane = JEditorPane("text/html", "").apply {
             isEditable = false
             putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, true)
+            background = Color(43, 43, 43)
         }
+
+        val resultScrollPane = JBScrollPane(resultPane)
+        val responseActionsPanel = JPanel(FlowLayout(FlowLayout.RIGHT))
+        responseActionsPanel.background = Color(43, 43, 43)
+        responseActionsPanel.isVisible = false
 
         val button = JButton("Ask ChatGPT")
         button.addActionListener {
@@ -73,24 +79,74 @@ class MyToolWindowFactory : ToolWindowFactory {
             }
 
             if (fullPrompt.isNotBlank()) {
-                // Clear the UI and the list for the next interaction
-                chatPanel.removeAll()
-                chatPanel.revalidate()
-                chatPanel.repaint()
-                pastedCodeSnippets.clear()
+                resultPane.text = "<html><body><p>Waiting for response...</p></body></html>"
+                responseActionsPanel.isVisible = false
 
                 CoroutineScope(Dispatchers.IO).launch {
                     val response = queryChatGPT(fullPrompt.toString())
+                    lastRawResponse = response
                     SwingUtilities.invokeLater {
                         resultPane.text = formatResponseText(response ?: "Error receiving response.")
+                        resultPane.caretPosition = 0
+                        if (!response.isNullOrBlank()) {
+                            responseActionsPanel.isVisible = true
+                        }
                     }
                 }
             }
         }
 
-        val inputScrollPane = JBScrollPane(inputArea)
-        val resultScrollPane = JBScrollPane(resultPane)
+        val acceptAllButton = JButton("Accept All").apply {
+            addActionListener {
+                val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return@addActionListener
+                val document = editor.document
 
+                lastRawResponse?.let { rawResponse ->
+                    val codeToInsert = extractCodeFromResponse(rawResponse)
+                    if (codeToInsert.isNotBlank()) {
+                        WriteCommandAction.runWriteCommandAction(project) {
+                            if (pastedCodeSnippets.isNotEmpty()) {
+                                // Replacement logic
+                                val sortedSnippets = pastedCodeSnippets.sortedBy { it.startLine }
+                                val firstSnippet = sortedSnippets.first()
+                                val lastSnippet = sortedSnippets.last()
+
+                                val startOffset = document.getLineStartOffset(firstSnippet.startLine - 1)
+                                val endOffset = document.getLineEndOffset(lastSnippet.endLine - 1)
+
+                                document.replaceString(startOffset, endOffset, codeToInsert)
+                            } else {
+                                // Insertion logic
+                                val caretModel = editor.caretModel
+                                val offset = caretModel.offset
+                                document.insertString(offset, codeToInsert)
+                            }
+                        }
+                    }
+                    // Cleanup UI
+                    resultPane.text = ""
+                    lastRawResponse = null
+                    responseActionsPanel.isVisible = false
+                    chatPanel.removeAll()
+                    chatPanel.revalidate()
+                    chatPanel.repaint()
+                    pastedCodeSnippets.clear()
+                }
+            }
+        }
+
+        val rejectAllButton = JButton("Reject All").apply {
+            addActionListener {
+                resultPane.text = ""
+                lastRawResponse = null
+                responseActionsPanel.isVisible = false
+            }
+        }
+
+        responseActionsPanel.add(acceptAllButton)
+        responseActionsPanel.add(rejectAllButton)
+
+        val inputScrollPane = JBScrollPane(inputArea)
         val bottomPanel = JPanel(BorderLayout())
         bottomPanel.add(inputScrollPane, BorderLayout.CENTER)
         bottomPanel.add(button, BorderLayout.EAST)
@@ -100,10 +156,13 @@ class MyToolWindowFactory : ToolWindowFactory {
             horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
         }
 
-        mainPanel.add(chatScrollPane, BorderLayout.CENTER)
-        mainPanel.add(bottomPanel, BorderLayout.SOUTH)
-        mainPanel.add(resultScrollPane, BorderLayout.NORTH)
+        val responsePanel = JPanel(BorderLayout())
+        responsePanel.add(resultScrollPane, BorderLayout.CENTER)
+        responsePanel.add(responseActionsPanel, BorderLayout.SOUTH)
 
+        mainPanel.add(chatScrollPane, BorderLayout.NORTH)
+        mainPanel.add(responsePanel, BorderLayout.CENTER)
+        mainPanel.add(bottomPanel, BorderLayout.SOUTH)
 
         val content = ContentFactory.getInstance().createContent(mainPanel, "", false)
         toolWindow.contentManager.addContent(content)
@@ -116,20 +175,20 @@ class MyToolWindowFactory : ToolWindowFactory {
             val file = FileDocumentManager.getInstance().getFile(document) ?: return@runReadAction
             val fileText = document.text
 
-            val startIndex = fileText.indexOf(code.trim())
+            val codeTrimmed = code.trim()
+            val startIndex = fileText.indexOf(codeTrimmed)
             if (startIndex != -1) {
                 val startLine = document.getLineNumber(startIndex) + 1
-                val endLine = document.getLineNumber(startIndex + code.trim().length) + 1
+                val endLine = document.getLineNumber(startIndex + codeTrimmed.length) + 1
                 val fileName = file.name
 
-                val snippet = CodeSnippet(fileName, startLine, endLine, code.trim())
+                val snippet = CodeSnippet(fileName, startLine, endLine, codeTrimmed)
                 pastedCodeSnippets.add(snippet)
 
-                // Create and add the UI component for the snippet
                 SwingUtilities.invokeLater {
-                    val snippetComponent = createSnippetComponent(snippet) {
+                    val snippetComponent = createSnippetComponent(snippet) { component ->
                         pastedCodeSnippets.remove(snippet)
-                        container.remove(it)
+                        container.remove(component)
                         container.revalidate()
                         container.repaint()
                     }
@@ -147,11 +206,10 @@ class MyToolWindowFactory : ToolWindowFactory {
             BorderFactory.createMatteBorder(0, 0, 1, 0, Color.DARK_GRAY),
             BorderFactory.createEmptyBorder(10, 10, 10, 10)
         )
-        panel.maximumSize = Dimension(Integer.MAX_VALUE, 150) // Constrain height
+        panel.maximumSize = Dimension(Integer.MAX_VALUE, 150)
         panel.alignmentX = Component.LEFT_ALIGNMENT
         panel.background = Color(43, 43, 43)
 
-        // Top panel for file info and remove button
         val topPanel = JPanel(BorderLayout())
         topPanel.background = Color(43, 43, 43)
         val fileLabel = JLabel("${snippet.fileName} (lines ${snippet.startLine}-${snippet.endLine})")
@@ -167,10 +225,10 @@ class MyToolWindowFactory : ToolWindowFactory {
                 onRemove(panel)
             }
         }
+
         topPanel.add(fileLabel, BorderLayout.CENTER)
         topPanel.add(removeButton, BorderLayout.EAST)
 
-        // JEditorPane for syntax-highlighted code
         val codePane = JEditorPane("text/html", formatCodeToHtml(snippet)).apply {
             isEditable = false
             putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, true)
@@ -205,8 +263,6 @@ class MyToolWindowFactory : ToolWindowFactory {
         """.trimIndent()
     }
 
-    // Your existing queryChatGPT, formatResponseText, and other helper methods remain here.
-    // Make sure to add them back in.
     private val apiKey: String by lazy {
         val props = java.util.Properties()
         val inputStream = javaClass.classLoader.getResourceAsStream("config.properties")
@@ -214,16 +270,21 @@ class MyToolWindowFactory : ToolWindowFactory {
         props.load(inputStream)
         props.getProperty("openai.api.key") ?: throw IllegalStateException("API key not set in config.properties")
     }
-    private fun queryChatGPT(inputText: String): String? {
 
-        val url = "https://api.openai.com/v1/responses"
+    private fun queryChatGPT(inputText: String): String? {
+        val url = "https://api.openai.com/v1/chat/completions"
         val mediaType = "application/json".toMediaType()
         val client = OkHttpClient()
 
         val json = Gson().toJson(
             mapOf(
                 "model" to "gpt-4o-mini",
-                "input" to inputText
+                "messages" to listOf(
+                    mapOf(
+                        "role" to "user",
+                        "content" to inputText
+                    )
+                )
             )
         )
 
@@ -236,82 +297,81 @@ class MyToolWindowFactory : ToolWindowFactory {
 
         return try {
             client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return "HTTP error: ${response.code}"
+                if (!response.isSuccessful) return "HTTP error: ${response.code}\n${response.body?.string()}"
 
                 val body = response.body?.string() ?: return "Empty response"
                 val root = JsonParser.parseString(body).asJsonObject
 
-                val outputArray = root.getAsJsonArray("output")
-                if (outputArray.size() == 0) return "No output received"
+                val choices = root.getAsJsonArray("choices")
+                if (choices.size() == 0) return "No choices in response"
 
-                val firstOutput = outputArray[0].asJsonObject
-                val contentArray = firstOutput.getAsJsonArray("content")
-                if (contentArray.size() == 0) return "No content received"
-
-                val textObj = contentArray[0].asJsonObject
-                val text = textObj.get("text").asString
-                // Detect if it's likely to be code (simple heuristic)
-                return if (looksLikeCode(text)) {
-                    "```\n$text\n```"
-                } else {
-                    text
-                }
+                val firstChoice = choices[0].asJsonObject
+                val message = firstChoice.getAsJsonObject("message")
+                message.get("content").asString
             }
         } catch (e: Exception) {
             "Exception: ${e.message}"
         }
     }
-    private fun looksLikeCode(text: String): Boolean {
-        val codeKeywords = listOf("public ", "class ", "def ", "function ", "val ", "var ", "if (", "for (", "while (")
-        return codeKeywords.any { text.contains(it) } || text.contains("{") && text.contains("}")
+
+    private fun extractCodeFromResponse(rawResponse: String): String {
+        val codeBlocks = mutableListOf<String>()
+        val lines = rawResponse.lines()
+        var inCodeBlock = false
+        val codeBlockContent = StringBuilder()
+
+        for (line in lines) {
+            if (line.trim().startsWith("```")) {
+                if (inCodeBlock) {
+                    codeBlocks.add(codeBlockContent.toString())
+                    codeBlockContent.clear()
+                }
+                inCodeBlock = !inCodeBlock
+            } else if (inCodeBlock) {
+                codeBlockContent.append(line).append("\n")
+            }
+        }
+        return codeBlocks.joinToString("\n").trim()
     }
+
     private fun formatResponseText(raw: String): String {
         val builder = StringBuilder()
-        builder.append("<html><body style=\"font-family: monospace; font-size: 12px; background-color: #2b2b2b; color: #a9b7c6;\">")
+        builder.append("<html><body style=\"font-family: sans-serif; font-size: 12px; background-color: #2b2b2b; color: #a9b7c6; padding: 10px;\">")
 
         var inCodeBlock = false
         var codeLanguage = ""
 
         for (line in raw.lines()) {
             when {
-                line.trim() == "```" -> {
+                line.trim().startsWith("```") -> {
                     if (inCodeBlock) {
                         builder.append("</pre>")
                         inCodeBlock = false
                         codeLanguage = ""
-                    }
-                }
-
-                line.trim().startsWith("```java") || line.trim().startsWith("```bash") -> {
-                    if (!inCodeBlock) {
-                        codeLanguage = line.trim().removePrefix("```").lowercase()
-                        // *** FIX: Removed unsupported 'border-radius' property ***
-                        builder.append("<pre style=\"background-color:#3c3f41; color:#a9b7c6; padding:10px;\">")
+                    } else {
                         inCodeBlock = true
+                        codeLanguage = line.trim().removePrefix("```").lowercase()
+                        builder.append("<pre style=\"background-color:#3c3f41; color:#a9b7c6; padding:10px; border: 1px solid #555;\">")
                     }
                 }
-
                 inCodeBlock -> {
                     val highlighted = when (codeLanguage) {
-                        "java" -> highlightJava(line)
-                        "bash" -> highlightBash(line)
+                        "java", "kotlin" -> highlightJava(line)
+                        "bash", "shell" -> highlightBash(line)
                         else -> escapeHtml(line)
                     }
                     builder.append(highlighted).append("\n")
                 }
-
                 line.trim().startsWith("###") -> {
                     val heading = line.removePrefix("###").trim()
                     builder.append("<h3>$heading</h3>")
                 }
-
                 "**" in line -> {
                     val bolded = line.replace(Regex("\\*\\*(.*?)\\*\\*"), "<b>$1</b>")
-                    builder.append("<div>$bolded</div>")
+                    builder.append("<p>$bolded</p>")
                 }
-
                 else -> {
-                    builder.append("<div>${escapeHtml(line)}</div>")
+                    builder.append("<p>${escapeHtml(line)}</p>")
                 }
             }
         }
@@ -323,42 +383,37 @@ class MyToolWindowFactory : ToolWindowFactory {
         builder.append("</body></html>")
         return builder.toString()
     }
+
     private fun highlightBash(code: String): String {
         val keywords = listOf("echo", "cd", "ls", "pwd", "rm", "mkdir", "touch", "cat", "sudo", "chmod", "chown", "git", "export")
         val variables = Regex("\\$[A-Za-z_][A-Za-z0-9_]*")
 
         var escaped = escapeHtml(code)
 
-        // Highlight comments
         escaped = escaped.replace(Regex("#.*")) {
             "<span style='color:#808080'>${it.value}</span>"
         }
-
-        // Highlight strings
         escaped = escaped.replace(Regex("\"(.*?)\"")) {
             "<span style='color:#6A8759'>&quot;${it.groupValues[1]}&quot;</span>"
         }
-
-        // Highlight variables
         escaped = escaped.replace(variables) {
             "<span style='color:#9876AA'>${it.value}</span>"
         }
-
-        // Highlight keywords
         for (kw in keywords) {
             escaped = escaped.replace(Regex("\\b$kw\\b")) {
                 "<span style='color:#CC7832'>${it.value}</span>"
             }
         }
-
         return escaped
     }
+
     private fun escapeHtml(text: String): String {
         return text
             .replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")
     }
+
     private fun highlightJava(code: String): String {
         val keywords = listOf(
             "public", "class", "static", "void", "int", "long", "if", "else",
@@ -368,23 +423,17 @@ class MyToolWindowFactory : ToolWindowFactory {
 
         var escaped = escapeHtml(code)
 
-        // Highlight strings
         escaped = escaped.replace(Regex("\"(.*?)\"")) {
             "<span style='color:#6A8759'>&quot;${it.groupValues[1]}&quot;</span>"
         }
-
-        // Highlight comments
         escaped = escaped.replace(Regex("(//.*)$")) {
             "<span style='color:#808080'>${it.groupValues[1]}</span>"
         }
-
-        // Highlight keywords
         for (kw in keywords) {
             escaped = escaped.replace(Regex("\\b$kw\\b")) {
                 "<span style='color:#CC7832'>${it.value}</span>"
             }
         }
-
         return escaped
     }
 }
