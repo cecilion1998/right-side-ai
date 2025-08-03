@@ -27,7 +27,7 @@
         <toolWindow
                 id="MyToolWindow"
                 anchor="right"
-                factoryClass="ir.dotin.test11.MyToolWindowFactory"
+                factoryClass="ir.dotin.AIPlugin.MyToolWindowFactory"
                 icon="AllIcons.Toolwindows.ToolWindowPalette"
         />
     </extensions>
